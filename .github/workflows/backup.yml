@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # 允許手動觸發
 
 env:
-  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'https://github.com/LostSunset/visual-try-on.git' }}
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'https://github.com/huggingface/transformers.js.git' }}
   MAIN_BRANCH: ${{ vars.MAIN_BRANCH || 'main' }}
 
 jobs:

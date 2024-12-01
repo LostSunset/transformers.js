@@ -1,4 +1,4 @@
-import { env, AutoProcessor, RawImage } from "../src/transformers.js";
+import { env, AutoProcessor, AutoImageProcessor, RawImage } from "../src/transformers.js";
 import { init, MAX_TEST_EXECUTION_TIME } from "./init.js";
 import { compare } from "./test_utils.js";
 
@@ -10,6 +10,7 @@ env.useFSCache = false;
 const sum = (array) => Number(array.reduce((a, b) => a + b, array instanceof BigInt64Array ? 0n : 0));
 const avg = (array) => sum(array) / array.length;
 
+/** @type {Map<string, RawImage>} */
 const IMAGE_CACHE = new Map();
 const load_image = async (url) => {
   const cached = IMAGE_CACHE.get(url);
@@ -40,13 +41,16 @@ const MODELS = {
   nougat: "Xenova/nougat-small",
   owlvit: "Xenova/owlvit-base-patch32",
   clip: "Xenova/clip-vit-base-patch16",
+  jina_clip: "jinaai/jina-clip-v2",
   vitmatte: "Xenova/vitmatte-small-distinctions-646",
   dinov2: "Xenova/dinov2-small-imagenet1k-1-layer",
   // efficientnet: 'Xenova/efficientnet-b0',
   florence2: "Xenova/tiny-random-Florence2ForConditionalGeneration",
+  qwen2_vl: "hf-internal-testing/tiny-random-Qwen2VLForConditionalGeneration",
 };
 
 const TEST_IMAGES = {
+  white_image: "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/white-image.png",
   pattern_3x3: "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pattern_3x3.png",
   pattern_3x5: "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pattern_3x5.png",
   checkerboard_8x8: "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/checkerboard_8x8.png",
@@ -73,7 +77,7 @@ describe("Processors", () => {
     it(
       MODELS.swin2sr,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.swin2sr);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.swin2sr);
 
         {
           // Pad to multiple of 8 (3x3 -> 8x8)
@@ -101,7 +105,7 @@ describe("Processors", () => {
     it(
       MODELS.sam,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.sam);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.sam);
 
         {
           // without input points
@@ -173,7 +177,7 @@ describe("Processors", () => {
     it(
       MODELS["donut-swin"],
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS["donut-swin"]);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS["donut-swin"]);
 
         {
           const image = await load_image(TEST_IMAGES.receipt);
@@ -193,7 +197,7 @@ describe("Processors", () => {
     it(
       MODELS.resnet,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.resnet);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.resnet);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -213,7 +217,7 @@ describe("Processors", () => {
     it(
       MODELS.vit,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.vit);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.vit);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -233,7 +237,7 @@ describe("Processors", () => {
     it(
       MODELS.mobilevit,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.mobilevit);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.mobilevit);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -254,7 +258,7 @@ describe("Processors", () => {
     it(
       MODELS.mobilevit_2,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.mobilevit_2);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.mobilevit_2);
 
         {
           // Tests grayscale image
@@ -276,7 +280,7 @@ describe("Processors", () => {
     it(
       MODELS.mobilevit_3,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.mobilevit_3);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.mobilevit_3);
 
         {
           const image = await load_image(TEST_IMAGES.cats);
@@ -299,7 +303,7 @@ describe("Processors", () => {
     it(
       MODELS.deit,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.deit);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.deit);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -319,7 +323,7 @@ describe("Processors", () => {
     it(
       MODELS.beit,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.beit);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.beit);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -339,7 +343,7 @@ describe("Processors", () => {
     it(
       MODELS.detr,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.detr);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.detr);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -362,7 +366,7 @@ describe("Processors", () => {
     it(
       MODELS.yolos,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.yolos);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.yolos);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -382,7 +386,7 @@ describe("Processors", () => {
     it(
       MODELS.dpt,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.dpt);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.dpt);
 
         {
           // Tests grayscale image
@@ -404,7 +408,7 @@ describe("Processors", () => {
     it(
       MODELS.glpn,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.glpn);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.glpn);
 
         {
           const image = await load_image(TEST_IMAGES.cats);
@@ -436,7 +440,7 @@ describe("Processors", () => {
     it(
       MODELS.nougat,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.nougat);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.nougat);
 
         {
           const image = await load_image(TEST_IMAGES.paper);
@@ -454,7 +458,7 @@ describe("Processors", () => {
 
     // OwlViTFeatureExtractor
     it(MODELS.owlvit, async () => {
-      const processor = await AutoProcessor.from_pretrained(MODELS.owlvit);
+      const processor = await AutoImageProcessor.from_pretrained(MODELS.owlvit);
       {
         const image = await load_image(TEST_IMAGES.cats);
         const { pixel_values, original_sizes, reshaped_input_sizes } = await processor(image);
@@ -472,7 +476,7 @@ describe("Processors", () => {
     it(
       MODELS.clip,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.clip);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.clip);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -488,6 +492,27 @@ describe("Processors", () => {
       MAX_TEST_EXECUTION_TIME,
     );
 
+    // JinaCLIPImageProcessor
+    // - custom config overrides
+    it(
+      MODELS.jina_clip,
+      async () => {
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.jina_clip);
+
+        {
+          const image = await load_image(TEST_IMAGES.tiger);
+          const { pixel_values, original_sizes, reshaped_input_sizes } = await processor(image);
+
+          compare(pixel_values.dims, [1, 3, 512, 512]);
+          compare(avg(pixel_values.data), -0.06637834757566452);
+
+          compare(original_sizes, [[408, 612]]);
+          compare(reshaped_input_sizes, [[512, 512]]);
+        }
+      },
+      MAX_TEST_EXECUTION_TIME,
+    );
+
     // VitMatteImageProcessor
     //  - tests custom overrides
     //  - tests multiple inputs
@@ -496,7 +521,7 @@ describe("Processors", () => {
     it(
       MODELS.vitmatte,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.vitmatte);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.vitmatte);
 
         {
           const image = await load_image(TEST_IMAGES.vitmatte_image);
@@ -543,7 +568,7 @@ describe("Processors", () => {
     it(
       MODELS.dinov2,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.dinov2);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.dinov2);
 
         {
           const image = await load_image(TEST_IMAGES.tiger);
@@ -566,7 +591,7 @@ describe("Processors", () => {
     it(
       MODELS.dpt_2,
       async () => {
-        const processor = await AutoProcessor.from_pretrained(MODELS.dpt_2);
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.dpt_2);
 
         {
           const image = await load_image(TEST_IMAGES.cats);
@@ -598,7 +623,7 @@ describe("Processors", () => {
     // // EfficientNetImageProcessor
     // //  - tests include_top
     // it(MODELS.efficientnet, async () => {
-    //     const processor = await AutoProcessor.from_pretrained(MODELS.efficientnet)
+    //     const processor = await AutoImageProcessor.from_pretrained(MODELS.efficientnet)
 
     //     {
     //         const image = await load_image(TEST_IMAGES.cats);
@@ -611,6 +636,28 @@ describe("Processors", () => {
     //         compare(reshaped_input_sizes, [[224, 224]]);
     //     }
     // }, MAX_TEST_EXECUTION_TIME);
+
+    // Qwen2VLProcessor
+    // - custom image processing (min_pixels, max_pixels)
+    it(
+      MODELS.qwen2_vl,
+      async () => {
+        const processor = await AutoImageProcessor.from_pretrained(MODELS.qwen2_vl);
+
+        {
+          const image = await load_image(TEST_IMAGES.white_image);
+          const { pixel_values, image_grid_thw, original_sizes, reshaped_input_sizes } = await processor(image);
+
+          compare(pixel_values.dims, [256, 1176]);
+          compare(avg(pixel_values.data), 2.050372362136841);
+          compare(image_grid_thw.tolist(), [[1n, 16n, 16n]]);
+
+          compare(original_sizes, [[224, 224]]);
+          compare(reshaped_input_sizes, [[224, 224]]);
+        }
+      },
+      MAX_TEST_EXECUTION_TIME,
+    );
   });
 
   describe("Audio processors", () => {
@@ -810,7 +857,7 @@ describe("Processors", () => {
     describe(
       "FlorenceProcessor",
       () => {
-        /** @type {import('../src/processors.js').Florence2Processor} */
+        /** @type {import('../src/transformers.js').Florence2Processor} */
         let processor;
         let images = {};
 
@@ -1010,6 +1057,42 @@ describe("Processors", () => {
               compare(result, target);
             });
           }
+        });
+      },
+      MAX_TEST_EXECUTION_TIME,
+    );
+
+    describe(
+      "Qwen2VLProcessor",
+      () => {
+        /** @type {import('../src/transformers.js').Qwen2VLProcessor} */
+        let processor;
+        let images = {};
+
+        beforeAll(async () => {
+          processor = await AutoProcessor.from_pretrained(MODELS.qwen2_vl);
+          images = {
+            white_image: await load_image(TEST_IMAGES.white_image),
+          };
+        });
+
+        it("Image and text", async () => {
+          const conversation = [
+            {
+              role: "user",
+              content: [{ type: "image" }, { type: "text", text: "Describe this image." }],
+            },
+          ];
+
+          const text = processor.apply_chat_template(conversation, {
+            add_generation_prompt: true,
+          });
+          const { input_ids, attention_mask, pixel_values, image_grid_thw } = await processor(text, images.white_image);
+
+          compare(input_ids.dims, [1, 89]);
+          compare(attention_mask.dims, [1, 89]);
+          compare(pixel_values.dims, [256, 1176]);
+          compare(image_grid_thw.dims, [1, 3]);
         });
       },
       MAX_TEST_EXECUTION_TIME,

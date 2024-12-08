@@ -182,6 +182,22 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
         }
     }
 
+    if (dtype === DATA_TYPES.auto) {
+        // Try to choose the auto dtype based on the custom config
+        let config_dtype = custom_config.dtype;
+        if (typeof config_dtype !== 'string') {
+            config_dtype = config_dtype[fileName];
+        }
+
+        if (config_dtype && config_dtype !== DATA_TYPES.auto && DATA_TYPES.hasOwnProperty(config_dtype)) {
+            // Defined by the custom config, and is not "auto"
+            dtype = config_dtype;
+        } else {
+            // Choose default dtype based on device, falling back to fp32
+            dtype = DEFAULT_DEVICE_DTYPE_MAPPING[selectedDevice] ?? DATA_TYPES.fp32;
+        }
+    }
+
     const selectedDtype = /** @type {import("./utils/dtypes.js").DataType} */(dtype);
 
     if (!DEFAULT_DTYPE_SUFFIX_MAPPING.hasOwnProperty(selectedDtype)) {
@@ -387,9 +403,17 @@ async function sessionRun(session, inputs) {
         output = replaceTensors(output);
         return output;
     } catch (e) {
+        // Error messages can be long (nested) and uninformative. For this reason,
+        // we apply minor formatting to show the most important information
+        const formatted = Object.fromEntries(Object.entries(checkedInputs)
+            .map(([k, { type, dims, data }]) => [k, {
+                // Extract these properties from the underlying ORT tensor
+                type, dims, data,
+            }]));
+
         // This usually occurs when the inputs are of the wrong type.
         console.error(`An error occurred during model execution: "${e}".`);
-        console.error('Inputs given to model:', checkedInputs)
+        console.error('Inputs given to model:', formatted);
         throw e;
     }
 }
@@ -534,7 +558,9 @@ async function decoderForward(self, model_inputs, is_encoder_decoder = false) {
         new_model_inputs.use_cache_branch = boolTensor(!!past_key_values);
     }
     if (session.inputNames.includes('position_ids') && new_model_inputs.attention_mask && !new_model_inputs.position_ids) {
-        new_model_inputs.position_ids = createPositionIds(new_model_inputs, past_key_values);
+        // NOTE: Handle a special case for paligemma models, where positions are 1-indexed
+        const start_index = self.config.model_type === 'paligemma' ? 1 : 0;
+        new_model_inputs.position_ids = createPositionIds(new_model_inputs, past_key_values, start_index);
     }
 
     // Unpack the `past_key_values` object into model inputs
@@ -543,6 +569,39 @@ async function decoderForward(self, model_inputs, is_encoder_decoder = false) {
     // Select only the inputs that are needed for the current session
     const fixed = pick(new_model_inputs, session.inputNames);
     return await sessionRun(session, fixed);
+}
+
+
+
+function default_merge_input_ids_with_image_features({
+    image_token_id,
+    inputs_embeds,
+    image_features,
+    input_ids,
+    attention_mask,
+}) {
+    const image_tokens = input_ids.tolist().map(ids =>
+        ids.reduce((acc, x, idx) => {
+            if (x == image_token_id) acc.push(idx);
+            return acc;
+        }, [])
+    );
+    const n_image_tokens = image_tokens.reduce((acc, x) => acc + x.length, 0);
+    const n_image_features = image_features.dims[0];
+    if (n_image_tokens !== n_image_features) {
+        throw new Error(`Image features and image tokens do not match: tokens: ${n_image_tokens}, features ${n_image_features}`);
+    }
+
+    // Equivalent to performing a masked_scatter
+    let img = 0;
+    for (let i = 0; i < image_tokens.length; ++i) {
+        const tokens = image_tokens[i];
+        const embeds = inputs_embeds[i];
+        for (let j = 0; j < tokens.length; ++j) {
+            embeds[tokens[j]].data.set(image_features[img++].data)
+        }
+    }
+    return { inputs_embeds, attention_mask }
 }
 
 
@@ -637,14 +696,14 @@ async function imageTextToTextForward(self, {
  * @param {Tensor} attention_mask
  * @returns {{data: BigInt64Array, dims: number[]}}
  */
-function cumsum_masked_fill(attention_mask) {
+function cumsum_masked_fill(attention_mask, start_index = 0) {
     const [bz, seq_len] = attention_mask.dims;
     const attn_mask_data = attention_mask.data;
 
     const data = new BigInt64Array(attn_mask_data.length);
     for (let i = 0; i < bz; ++i) {
         const start = i * seq_len;
-        let sum = BigInt(0);
+        let sum = BigInt(start_index);
         for (let j = 0; j < seq_len; ++j) {
             const index = start + j;
             if (attn_mask_data[index] === 0n) {
@@ -671,10 +730,10 @@ function cumsum_masked_fill(attention_mask) {
  *     position_ids = position_ids[:, -input_ids.shape[1] :]
  * ```
  */
-function createPositionIds(model_inputs, past_key_values = null) {
+function createPositionIds(model_inputs, past_key_values = null, start_index = 0) {
     const { input_ids, inputs_embeds, attention_mask } = model_inputs;
 
-    const { data, dims } = cumsum_masked_fill(attention_mask);
+    const { data, dims } = cumsum_masked_fill(attention_mask, start_index);
     let position_ids = new Tensor('int64', data, dims);
     if (past_key_values) {
         const offset = -(input_ids ?? inputs_embeds).dims.at(1);
@@ -1013,7 +1072,10 @@ export class PreTrainedModel extends Callable {
 
         } else { // should be MODEL_TYPES.EncoderOnly
             if (modelType !== MODEL_TYPES.EncoderOnly) {
-                console.warn(`Model type for '${modelName ?? config?.model_type}' not found, assuming encoder-only architecture. Please report this at ${GITHUB_ISSUE_URL}.`)
+                const type = modelName ?? config?.model_type;
+                if (type !== 'custom') {
+                    console.warn(`Model type for '${type}' not found, assuming encoder-only architecture. Please report this at ${GITHUB_ISSUE_URL}.`)
+                }
             }
             info = await Promise.all([
                 constructSessions(pretrained_model_name_or_path, {
@@ -1757,7 +1819,7 @@ export class PreTrainedModel extends Callable {
             const dtype = session?.config?.kv_cache_dtype ?? 'float32';
             const empty = (dtype === 'float16') ? new Uint16Array() : [];
 
-            const batch_size = (decoderFeeds[this.main_input_name] ?? decoderFeeds.attention_mask).dims?.[0] ?? 1;
+            const batch_size = (decoderFeeds[this.main_input_name] ?? decoderFeeds.attention_mask)?.dims?.[0] ?? 1;
             const shapes = getKeyValueShapes(this.config, { batch_size });
 
             for (const name in shapes) {
@@ -3304,8 +3366,8 @@ export class VisionEncoderDecoderModel extends PreTrainedModel {
 export class LlavaPreTrainedModel extends PreTrainedModel {
     forward_params = [
         'input_ids',
-        'pixel_values',
         'attention_mask',
+        'pixel_values',
         'position_ids',
         'past_key_values',
     ];
@@ -3487,6 +3549,70 @@ export class Florence2ForConditionalGeneration extends Florence2PreTrainedModel 
         return decoder_outputs;
     }
 }
+
+export class PaliGemmaPreTrainedModel extends PreTrainedModel {
+    forward_params = [
+        'input_ids',
+        // 'inputs_embeds',
+        'attention_mask',
+        'pixel_values',
+        'position_ids',
+        'past_key_values',
+    ];
+}
+
+export class PaliGemmaForConditionalGeneration extends PaliGemmaPreTrainedModel {
+    _merge_input_ids_with_image_features(kwargs) {
+        const vision_hidden_size = kwargs.image_features.dims.at(-1);
+        const reshaped_image_hidden_states = kwargs.image_features.view(-1, vision_hidden_size);
+
+        return default_merge_input_ids_with_image_features({
+            // @ts-ignore
+            image_token_id: this.config.image_token_index,
+            ...kwargs,
+            image_features: reshaped_image_hidden_states,
+        })
+    }
+}
+
+//////////////////////////////////////////////////
+// Idefics3 Models
+export class Idefics3PreTrainedModel extends PreTrainedModel {
+    forward_params = [
+        'input_ids',
+        'attention_mask',
+        'pixel_values',
+        'pixel_attention_mask',
+        'position_ids',
+        'past_key_values',
+    ];
+}
+
+/**
+ * The LLAVA model which consists of a vision backbone and a language model.
+ */
+export class Idefics3ForConditionalGeneration extends Idefics3PreTrainedModel {
+
+    async encode_image({ pixel_values, pixel_attention_mask }) {
+        const features = (await sessionRun(this.sessions['vision_encoder'], { pixel_values, pixel_attention_mask })).image_features;
+        return features;
+    }
+
+    _merge_input_ids_with_image_features(kwargs) {
+        const vision_hidden_size = kwargs.image_features.dims.at(-1);
+        const reshaped_image_hidden_states = kwargs.image_features.view(-1, vision_hidden_size);
+
+        return default_merge_input_ids_with_image_features({
+            // @ts-ignore
+            image_token_id: this.config.image_token_id,
+            ...kwargs,
+            image_features: reshaped_image_hidden_states,
+        })
+    }
+}
+//////////////////////////////////////////////////
+
+//////////////////////////////////////////////////
 export class CLIPPreTrainedModel extends PreTrainedModel { }
 
 /**
@@ -3986,6 +4112,13 @@ export class OlmoModel extends OlmoPreTrainedModel { }
 export class OlmoForCausalLM extends OlmoPreTrainedModel { }
 //////////////////////////////////////////////////
 
+//////////////////////////////////////////////////
+// OLMo2 models
+export class Olmo2PreTrainedModel extends PreTrainedModel { }
+export class Olmo2Model extends Olmo2PreTrainedModel { }
+export class Olmo2ForCausalLM extends Olmo2PreTrainedModel { }
+//////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////
 // Granite models
@@ -4280,36 +4413,12 @@ export class Qwen2VLForConditionalGeneration extends Qwen2VLPreTrainedModel {
         return features;
     }
 
-    _merge_input_ids_with_image_features({
-        inputs_embeds,
-        image_features,
-        input_ids,
-        attention_mask,
-    }) {
-        // @ts-ignore
-        const { image_token_id } = this.config;
-        const image_tokens = input_ids.tolist().map(ids =>
-            ids.reduce((acc, x, idx) => {
-                if (x == image_token_id) acc.push(idx);
-                return acc;
-            }, [])
-        );
-        const n_image_tokens = image_tokens.reduce((acc, x) => acc + x.length, 0);
-        const n_image_features = image_features.dims[0];
-        if (n_image_tokens !== n_image_features) {
-            throw new Error(`Image features and image tokens do not match: tokens: ${n_image_tokens}, features ${n_image_features}`);
-        }
-
-        // Equivalent to performing a masked_scatter
-        let img = 0;
-        for (let i = 0; i < image_tokens.length; ++i) {
-            const tokens = image_tokens[i];
-            const embeds = inputs_embeds[i];
-            for (let j = 0; j < tokens.length; ++j) {
-                embeds[tokens[j]].data.set(image_features[img++].data)
-            }
-        }
-        return { inputs_embeds, attention_mask }
+    _merge_input_ids_with_image_features(kwargs) {
+        return default_merge_input_ids_with_image_features({
+            // @ts-ignore
+            image_token_id: this.config.image_token_id,
+            ...kwargs
+        })
     }
 
     prepare_inputs_for_generation(input_ids, model_inputs, generation_config) {
@@ -4416,6 +4525,20 @@ export class OPTForCausalLM extends OPTPreTrainedModel { }
 export class ViTPreTrainedModel extends PreTrainedModel { }
 export class ViTModel extends ViTPreTrainedModel { }
 export class ViTForImageClassification extends ViTPreTrainedModel {
+    /**
+     * @param {any} model_inputs
+     */
+    async _call(model_inputs) {
+        return new SequenceClassifierOutput(await super._call(model_inputs));
+    }
+}
+//////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////
+export class IJepaPreTrainedModel extends PreTrainedModel { }
+export class IJepaModel extends IJepaPreTrainedModel { }
+export class IJepaForImageClassification extends IJepaPreTrainedModel {
     /**
      * @param {any} model_inputs
      */
@@ -6696,6 +6819,7 @@ const MODEL_MAPPING_NAMES_ENCODER_ONLY = new Map([
     ['rt_detr', ['RTDetrModel', RTDetrModel]],
     ['table-transformer', ['TableTransformerModel', TableTransformerModel]],
     ['vit', ['ViTModel', ViTModel]],
+    ['ijepa', ['IJepaModel', IJepaModel]],
     ['pvt', ['PvtModel', PvtModel]],
     ['vit_msn', ['ViTMSNModel', ViTMSNModel]],
     ['vit_mae', ['ViTMAEModel', ViTMAEModel]],
@@ -6760,6 +6884,7 @@ const MODEL_MAPPING_NAMES_DECODER_ONLY = new Map([
     ['codegen', ['CodeGenModel', CodeGenModel]],
     ['llama', ['LlamaModel', LlamaModel]],
     ['olmo', ['OlmoModel', OlmoModel]],
+    ['olmo2', ['Olmo2Model', Olmo2Model]],
     ['mobilellm', ['MobileLLMModel', MobileLLMModel]],
     ['granite', ['GraniteModel', GraniteModel]],
     ['cohere', ['CohereModel', CohereModel]],
@@ -6851,6 +6976,7 @@ const MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = new Map([
     ['codegen', ['CodeGenForCausalLM', CodeGenForCausalLM]],
     ['llama', ['LlamaForCausalLM', LlamaForCausalLM]],
     ['olmo', ['OlmoForCausalLM', OlmoForCausalLM]],
+    ['olmo2', ['Olmo2ForCausalLM', Olmo2ForCausalLM]],
     ['mobilellm', ['MobileLLMForCausalLM', MobileLLMForCausalLM]],
     ['granite', ['GraniteForCausalLM', GraniteForCausalLM]],
     ['cohere', ['CohereForCausalLM', CohereForCausalLM]],
@@ -6914,6 +7040,7 @@ const MODEL_FOR_QUESTION_ANSWERING_MAPPING_NAMES = new Map([
 
 const MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES = new Map([
     ['vision-encoder-decoder', ['VisionEncoderDecoderModel', VisionEncoderDecoderModel]],
+    ['idefics3', ['Idefics3ForConditionalGeneration', Idefics3ForConditionalGeneration]],
 ]);
 
 const MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES = new Map([
@@ -6922,6 +7049,8 @@ const MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES = new Map([
     ['moondream1', ['Moondream1ForConditionalGeneration', Moondream1ForConditionalGeneration]],
     ['florence2', ['Florence2ForConditionalGeneration', Florence2ForConditionalGeneration]],
     ['qwen2-vl', ['Qwen2VLForConditionalGeneration', Qwen2VLForConditionalGeneration]],
+    ['idefics3', ['Idefics3ForConditionalGeneration', Idefics3ForConditionalGeneration]],
+    ['paligemma', ['PaliGemmaForConditionalGeneration', PaliGemmaForConditionalGeneration]],
 ]);
 
 const MODEL_FOR_DOCUMENT_QUESTION_ANSWERING_MAPPING_NAMES = new Map([
@@ -6930,6 +7059,7 @@ const MODEL_FOR_DOCUMENT_QUESTION_ANSWERING_MAPPING_NAMES = new Map([
 
 const MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING_NAMES = new Map([
     ['vit', ['ViTForImageClassification', ViTForImageClassification]],
+    ['ijepa', ['IJepaForImageClassification', IJepaForImageClassification]],
     ['pvt', ['PvtForImageClassification', PvtForImageClassification]],
     ['vit_msn', ['ViTMSNForImageClassification', ViTMSNForImageClassification]],
     ['fastvit', ['FastViTForImageClassification', FastViTForImageClassification]],

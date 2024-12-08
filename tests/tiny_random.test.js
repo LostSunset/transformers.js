@@ -10,7 +10,6 @@ import {
   BertTokenizer,
   T5Tokenizer,
   WhisperTokenizer,
-  BartTokenizer,
   MarianTokenizer,
   PreTrainedTokenizer,
   AutoTokenizer,
@@ -20,10 +19,13 @@ import {
   AutoProcessor,
   Processor,
   Florence2Processor,
+  Idefics3Processor,
+  PaliGemmaProcessor,
 
   // Models
   LlamaForCausalLM,
   OlmoForCausalLM,
+  Olmo2ForCausalLM,
   GraniteForCausalLM,
   CohereModel,
   CohereForCausalLM,
@@ -49,10 +51,12 @@ import {
   BertForQuestionAnswering,
   MusicgenForConditionalGeneration,
   LlavaForConditionalGeneration,
+  Idefics3ForConditionalGeneration,
   WhisperForConditionalGeneration,
   VisionEncoderDecoderModel,
   Florence2ForConditionalGeneration,
   Qwen2VLForConditionalGeneration,
+  PaliGemmaForConditionalGeneration,
   MarianMTModel,
   PatchTSTModel,
   PatchTSTForPrediction,
@@ -756,6 +760,148 @@ describe("Tiny random models", () => {
     });
   });
 
+  describe("idefics3", () => {
+    const conversation = [
+      {
+        role: "user",
+        content: [{ type: "image" }, { type: "text", text: "Can you describe this image?" }],
+      },
+    ];
+
+    // Empty white and black images
+    const white_image_dims = [224, 224, 3];
+    const white_image = new RawImage(new Uint8ClampedArray(white_image_dims[0] * white_image_dims[1] * white_image_dims[2]).fill(255), ...white_image_dims);
+    const black_image_dims = [720, 360, 3];
+    const black_image = new RawImage(new Uint8ClampedArray(black_image_dims[0] * black_image_dims[1] * black_image_dims[2]).fill(0), ...black_image_dims);
+
+    describe("Idefics3ForConditionalGeneration", () => {
+      const model_id = "hf-internal-testing/tiny-random-Idefics3ForConditionalGeneration";
+
+      /** @type {Idefics3ForConditionalGeneration} */
+      let model;
+      /** @type {Idefics3Processor} */
+      let processor;
+      /** @type {string} */
+      let text;
+      beforeAll(async () => {
+        model = await Idefics3ForConditionalGeneration.from_pretrained(model_id, {
+          // TODO move to config
+          ...DEFAULT_MODEL_OPTIONS,
+        });
+        processor = await AutoProcessor.from_pretrained(model_id);
+
+        text = processor.apply_chat_template(conversation, {
+          add_generation_prompt: true,
+        });
+      }, MAX_MODEL_LOAD_TIME);
+
+      it(
+        "forward w/ image splitting (default)",
+        async () => {
+          const inputs = await processor(text, white_image, {
+            do_image_splitting: true,
+          });
+
+          const { logits } = await model(inputs);
+          expect(logits.dims).toEqual([1, 3041, 128259]);
+          expect(logits.mean().item()).toBeCloseTo(-0.0002692154666874558, 6);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "forward w/o image splitting",
+        async () => {
+          const inputs = await processor(text, white_image, {
+            do_image_splitting: false,
+          });
+
+          const { logits } = await model(inputs);
+          expect(logits.dims).toEqual([1, 189, 128259]);
+          expect(logits.mean().item()).toBeCloseTo(-0.00019743280427064747, 6);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "batch_size=1 w/ image splitting",
+        async () => {
+          const inputs = await processor(text, white_image, {
+            do_image_splitting: true,
+          });
+          const generate_ids = await model.generate({
+            ...inputs,
+            max_new_tokens: 10,
+
+            // To obtain unique output tokens, deterministically
+            repetition_penalty: 2.0,
+          });
+          expect(generate_ids.dims).toEqual([1, 3051]);
+
+          const new_tokens = generate_ids.slice(null, [inputs.input_ids.dims.at(-1), null]);
+          expect(new_tokens.tolist()).toEqual([[64531n, 121777n, 70370n, 105334n, 12720n, 113356n, 47739n, 59240n, 102001n, 60344n]]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "batch_size=1 w/o image splitting",
+        async () => {
+          const inputs = await processor(text, white_image, {
+            do_image_splitting: false,
+          });
+          const generate_ids = await model.generate({
+            ...inputs,
+            max_new_tokens: 10,
+
+            // To obtain unique output tokens, deterministically
+            repetition_penalty: 2.0,
+          });
+          expect(generate_ids.dims).toEqual([1, 199]);
+
+          const new_tokens = generate_ids.slice(null, [inputs.input_ids.dims.at(-1), null]);
+          expect(new_tokens.tolist()).toEqual([[64531n, 121777n, 70370n, 105334n, 12720n, 113356n, 47739n, 59240n, 59697n, 65246n]]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "batch_size=1 multi-image w/o image splitting",
+        async () => {
+          const multi_image_conversation = [
+            {
+              role: "user",
+              content: [{ type: "image" }, { type: "image" }, { type: "text", text: "Can you describe these images?" }],
+            },
+          ];
+
+          const multi_image_text = processor.apply_chat_template(multi_image_conversation, {
+            add_generation_prompt: true,
+          });
+          const inputs = await processor(multi_image_text, [white_image, black_image], {
+            do_image_splitting: false,
+          });
+          const generate_ids = await model.generate({
+            ...inputs,
+            max_new_tokens: 10,
+
+            // To obtain unique output tokens, deterministically
+            repetition_penalty: 2.0,
+          });
+          expect(generate_ids.dims).toEqual([1, 374]);
+
+          const new_tokens = generate_ids.slice(null, [inputs.input_ids.dims.at(-1), null]);
+          expect(new_tokens.tolist()).toEqual([[73189n, 99346n, 113252n, 51743n, 33499n, 66430n, 78739n, 89539n, 121023n, 14474n]]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      afterAll(async () => {
+        await model?.dispose();
+      }, MAX_MODEL_DISPOSE_TIME);
+    });
+  });
+
   describe("florence2", () => {
     const texts = ["Describe with a paragraph what is shown in the image.", "Locate the objects with category name in the image."];
 
@@ -919,6 +1065,58 @@ describe("Tiny random models", () => {
 
           const new_tokens = generate_ids.slice(null, [inputs.input_ids.dims.at(-1), null]);
           expect(new_tokens.tolist()).toEqual([[24284n, 35302n, 60575n, 38679n, 113390n, 115118n, 137596n, 38241n, 96726n, 142301n]]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      afterAll(async () => {
+        await model?.dispose();
+      }, MAX_MODEL_DISPOSE_TIME);
+    });
+  });
+
+  describe("paligemma", () => {
+    const text = "<image>What is on the flower?";
+
+    // Empty white image
+    const dims = [224, 224, 3];
+    const image = new RawImage(new Uint8ClampedArray(dims[0] * dims[1] * dims[2]).fill(255), ...dims);
+
+    describe("PaliGemmaForConditionalGeneration", () => {
+      const model_id = "hf-internal-testing/tiny-random-PaliGemmaForConditionalGeneration";
+
+      /** @type {PaliGemmaForConditionalGeneration} */
+      let model;
+      /** @type {PaliGemmaProcessor} */
+      let processor;
+      beforeAll(async () => {
+        model = await PaliGemmaForConditionalGeneration.from_pretrained(model_id, {
+          // TODO move to config
+          ...DEFAULT_MODEL_OPTIONS,
+        });
+        processor = await AutoProcessor.from_pretrained(model_id);
+      }, MAX_MODEL_LOAD_TIME);
+
+      it(
+        "forward",
+        async () => {
+          const inputs = await processor(image, text);
+
+          const { logits } = await model(inputs);
+          expect(logits.dims).toEqual([1, 264, 257216]);
+          expect(logits.mean().item()).toBeCloseTo(-0.0023024685215204954, 6);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "batch_size=1",
+        async () => {
+          const inputs = await processor(image, text);
+          const generate_ids = await model.generate({ ...inputs, max_new_tokens: 10 });
+
+          const new_tokens = generate_ids.slice(null, [inputs.input_ids.dims.at(-1), null]);
+          expect(new_tokens.tolist()).toEqual([[91711n, 24904n, 144054n, 124983n, 83862n, 124983n, 124983n, 124983n, 141236n, 124983n]]);
         },
         MAX_TEST_EXECUTION_TIME,
       );
@@ -1161,6 +1359,57 @@ describe("Tiny random models", () => {
           expect(outputs.tolist()).toEqual([
             [1n, 25521n, 10886n, 44936n, 38777n, 33038n, 18557n, 1810n, 33853n, 9517n],
             [25521n, 1533n, 37199n, 27362n, 30594n, 39261n, 8824n, 19175n, 8545n, 29335n],
+          ]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      afterAll(async () => {
+        await model?.dispose();
+      }, MAX_MODEL_DISPOSE_TIME);
+    });
+  });
+
+  describe("olmo2", () => {
+    describe("Olmo2ForCausalLM", () => {
+      const model_id = "hf-internal-testing/tiny-random-Olmo2ForCausalLM";
+      /** @type {Olmo2ForCausalLM} */
+      let model;
+      /** @type {GPT2Tokenizer} */
+      let tokenizer;
+      beforeAll(async () => {
+        model = await Olmo2ForCausalLM.from_pretrained(model_id, {
+          // TODO move to config
+          ...DEFAULT_MODEL_OPTIONS,
+        });
+        tokenizer = await GPT2Tokenizer.from_pretrained(model_id);
+        tokenizer.padding_side = "left";
+      }, MAX_MODEL_LOAD_TIME);
+
+      it(
+        "batch_size=1",
+        async () => {
+          const inputs = tokenizer("hello");
+          const outputs = await model.generate({
+            ...inputs,
+            max_length: 10,
+          });
+          expect(outputs.tolist()).toEqual([[15339n, 50957n, 43410n, 77030n, 91444n, 99516n, 80720n, 4608n, 90428n, 22806n]]);
+        },
+        MAX_TEST_EXECUTION_TIME,
+      );
+
+      it(
+        "batch_size>1",
+        async () => {
+          const inputs = tokenizer(["hello", "hello world"], { padding: true });
+          const outputs = await model.generate({
+            ...inputs,
+            max_length: 10,
+          });
+          expect(outputs.tolist()).toEqual([
+            [100277n, 15339n, 50957n, 43410n, 77030n, 91444n, 99516n, 80720n, 4608n, 90428n],
+            [15339n, 1917n, 12095n, 21350n, 61586n, 19306n, 39486n, 91527n, 59768n, 31934n],
           ]);
         },
         MAX_TEST_EXECUTION_TIME,

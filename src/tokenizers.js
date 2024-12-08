@@ -2605,6 +2605,12 @@ export class PreTrainedTokenizer extends Callable {
         this.unk_token = this.getToken('unk_token');
         this.unk_token_id = this.model.tokens_to_ids.get(this.unk_token);
 
+        this.bos_token = this.getToken('bos_token');
+        this.bos_token_id = this.model.tokens_to_ids.get(this.bos_token);
+
+        this.eos_token = this.getToken('eos_token');
+        this.eos_token_id = this.model.tokens_to_ids.get(this.eos_token);
+
         this.model_max_length = tokenizerConfig.model_max_length;
 
         /** @type {boolean} Whether or not to strip the text when tokenizing (removing excess spaces before and after the string). */
@@ -3577,6 +3583,11 @@ export class WhisperTokenizer extends PreTrainedTokenizer {
         let chunk = new_chunk();
         let time_offset = 0.0;
         const timestamp_begin = this.timestamp_begin;
+        // Whisper timestamp tokens start from 0.00 and go to timestamp 30.00 in 0.02 increments. 
+        // We can calculate the last time stamp token as timestamp_begin plus the number of tokens 
+        // tokens from 0.00 to 30.00 which is 1500. 
+        const total_timestamp_tokens = 1500; // (30.00 - 0.00) / 0.02
+        const timestamp_end = timestamp_begin + total_timestamp_tokens;
 
         let previous_tokens = [];
         let previous_token_timestamps = [];
@@ -3664,7 +3675,7 @@ export class WhisperTokenizer extends PreTrainedTokenizer {
                     } else {
                         // 2/ This is a regular special token, ignoring it
                     }
-                } else if (token >= timestamp_begin) {
+                } else if (token >= timestamp_begin && token <= timestamp_end) {
                     // 3/ Timestamp token
                     const time = (token - timestamp_begin) * time_precision + time_offset;
                     const rounded_time = round(time, 2);

@@ -95,8 +95,6 @@ function getNormalizedConfig(config) {
         case 'gpt_neox':
         case 'stablelm':
         case 'opt':
-        case 'phi':
-        case 'phi3':
         case 'falcon':
             mapping['num_heads'] = 'num_attention_heads';
             mapping['num_layers'] = 'num_hidden_layers';
@@ -112,6 +110,9 @@ function getNormalizedConfig(config) {
         case 'starcoder2':
         case 'qwen2':
         case 'qwen2_vl':
+        case 'phi':
+        case 'phi3':
+        case 'phi3_v':
             mapping['num_heads'] = 'num_key_value_heads';
             mapping['num_layers'] = 'num_hidden_layers';
             mapping['hidden_size'] = 'hidden_size';
@@ -143,6 +144,12 @@ function getNormalizedConfig(config) {
             mapping['num_heads'] = 'n_heads';
             mapping['num_layers'] = 'n_layers';
             mapping['hidden_size'] = 'd_model';
+            break;
+        case 'exaone':
+            mapping['num_heads'] = 'num_key_value_heads';
+            mapping['num_layers'] = 'num_layers';
+            mapping['dim_kv'] = 'head_dim';
+            mapping['num_attention_heads'] = 'num_attention_heads';
             break;
 
         // Encoder-decoder models
@@ -185,6 +192,7 @@ function getNormalizedConfig(config) {
             mapping['encoder_hidden_size'] = mapping['decoder_hidden_size'] = 'd_model';
             break;
         case 'musicgen_decoder':
+        case 'moonshine':
             mapping['num_encoder_layers'] = mapping['num_decoder_layers'] = 'num_hidden_layers';
             mapping['num_encoder_heads'] = mapping['num_decoder_heads'] = 'num_attention_heads';
             mapping['encoder_hidden_size'] = mapping['decoder_hidden_size'] = 'hidden_size';

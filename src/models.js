@@ -131,6 +131,7 @@ const MODEL_TYPES = {
     ImageTextToText: 6,
     Musicgen: 7,
     MultiModality: 8,
+    Phi3V: 9,
 }
 //////////////////////////////////////////////////
 
@@ -906,6 +907,10 @@ export class PreTrainedModel extends Callable {
                 this._forward = imageTextToTextForward;
                 this._prepare_inputs_for_generation = image_text_to_text_prepare_inputs_for_generation;
                 break;
+            case MODEL_TYPES.Phi3V:
+                this.can_generate = true;
+                this._prepare_inputs_for_generation = image_text_to_text_prepare_inputs_for_generation;
+                break;
 
             case MODEL_TYPES.MultiModality:
                 this.can_generate = true;
@@ -1064,6 +1069,18 @@ export class PreTrainedModel extends Callable {
                     gen_head: 'gen_head',
                     gen_img_embeds: 'gen_img_embeds',
                     image_decode: 'image_decode',
+                }, options),
+                getOptionalConfigs(pretrained_model_name_or_path, {
+                    generation_config: 'generation_config.json',
+                }, options),
+            ]);
+
+        } else if (modelType === MODEL_TYPES.Phi3V) {
+            info = await Promise.all([
+                constructSessions(pretrained_model_name_or_path, {
+                    prepare_inputs_embeds: 'prepare_inputs_embeds',
+                    model: 'model',
+                    vision_encoder: 'vision_encoder',
                 }, options),
                 getOptionalConfigs(pretrained_model_name_or_path, {
                     generation_config: 'generation_config.json',
@@ -1933,6 +1950,49 @@ export class BertForQuestionAnswering extends BertPreTrainedModel {
     }
 }
 //////////////////////////////////////////////////
+
+//////////////////////////////////////////////////
+// ModernBert models
+export class ModernBertPreTrainedModel extends PreTrainedModel { }
+export class ModernBertModel extends ModernBertPreTrainedModel { }
+
+export class ModernBertForMaskedLM extends ModernBertPreTrainedModel {
+    /**
+     * Calls the model on new inputs.
+     *
+     * @param {Object} model_inputs The inputs to the model.
+     * @returns {Promise<MaskedLMOutput>} An object containing the model's output logits for masked language modeling.
+     */
+    async _call(model_inputs) {
+        return new MaskedLMOutput(await super._call(model_inputs));
+    }
+}
+
+export class ModernBertForSequenceClassification extends ModernBertPreTrainedModel {
+    /**
+     * Calls the model on new inputs.
+     *
+     * @param {Object} model_inputs The inputs to the model.
+     * @returns {Promise<SequenceClassifierOutput>} An object containing the model's output logits for sequence classification.
+     */
+    async _call(model_inputs) {
+        return new SequenceClassifierOutput(await super._call(model_inputs));
+    }
+}
+
+export class ModernBertForTokenClassification extends ModernBertPreTrainedModel {
+    /**
+     * Calls the model on new inputs.
+     *
+     * @param {Object} model_inputs The inputs to the model.
+     * @returns {Promise<TokenClassifierOutput>} An object containing the model's output logits for token classification.
+     */
+    async _call(model_inputs) {
+        return new TokenClassifierOutput(await super._call(model_inputs));
+    }
+}
+//////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////
 // NomicBert models
@@ -3342,6 +3402,29 @@ export class WhisperForConditionalGeneration extends WhisperPreTrainedModel {
 }
 //////////////////////////////////////////////////
 
+
+//////////////////////////////////////////////////
+// Moonshine models
+export class MoonshinePreTrainedModel extends PreTrainedModel {
+
+    requires_attention_mask = false;
+    main_input_name = 'input_values';
+    forward_params = [
+        'input_values',
+        'decoder_input_ids',
+        'past_key_values',
+    ];
+};
+
+/**
+ * MoonshineModel class for training Moonshine models without a language model head.
+ */
+export class MoonshineModel extends MoonshinePreTrainedModel { }
+
+export class MoonshineForConditionalGeneration extends MoonshinePreTrainedModel { } 
+//////////////////////////////////////////////////
+
+
 //////////////////////////////////////////////////
 /**
  * Vision Encoder-Decoder model based on OpenAI's GPT architecture for image captioning and other vision tasks
@@ -3611,6 +3694,77 @@ export class Idefics3ForConditionalGeneration extends Idefics3PreTrainedModel {
     }
 }
 //////////////////////////////////////////////////
+
+export class Phi3VPreTrainedModel extends PreTrainedModel {
+    forward_params = [
+        'input_ids',
+        'inputs_embeds',
+        'attention_mask',
+        'position_ids',
+        'pixel_values',
+        'image_sizes',
+        'past_key_values',
+    ];
+}
+export class Phi3VForCausalLM extends Phi3VPreTrainedModel {
+
+    async forward({
+        // Produced by the tokenizer/processor:
+        input_ids = null,
+        attention_mask = null,
+        pixel_values = null,
+        image_sizes = null,
+
+        // Used during generation:
+        position_ids = null,
+        inputs_embeds = null,
+        past_key_values = null,
+
+        // Generic generation parameters
+        generation_config = null,
+        logits_processor = null,
+
+        // TODO: needed?
+        ...kwargs
+    }) {
+        if (!inputs_embeds) {
+            let image_features;
+            if (pixel_values && input_ids.dims[1] !== 1) {
+                if (!image_sizes) {
+                    throw new Error('`image_sizes` must be provided when `pixel_values` is provided.');
+                }
+
+                // Encode the image
+                ({ image_features } = await sessionRun(this.sessions['vision_encoder'], {
+                    pixel_values,
+                    image_sizes,
+                }));
+            } else {
+                const hidden_size = this.config.normalized_config.hidden_size;
+                image_features = new Tensor(
+                    'float32',
+                    [],
+                    [0, hidden_size],
+                );
+            }
+
+            ({ inputs_embeds } = await sessionRun(this.sessions['prepare_inputs_embeds'], {
+                input_ids,
+                image_features,
+            }));
+        }
+
+        const outputs = await decoderForward(this, {
+            inputs_embeds,
+            past_key_values,
+            attention_mask,
+            position_ids,
+            generation_config,
+            logits_processor,
+        }, false);
+        return outputs;
+    }
+}
 
 //////////////////////////////////////////////////
 export class CLIPPreTrainedModel extends PreTrainedModel { }
@@ -4110,6 +4264,14 @@ export class LlamaPreTrainedModel extends PreTrainedModel { }
 export class LlamaModel extends LlamaPreTrainedModel { }
 
 export class LlamaForCausalLM extends LlamaPreTrainedModel { }
+//////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////
+// EXAONE models
+export class ExaonePreTrainedModel extends PreTrainedModel { }
+export class ExaoneModel extends ExaonePreTrainedModel { }
+export class ExaoneForCausalLM extends ExaonePreTrainedModel { }
 //////////////////////////////////////////////////
 
 
@@ -6802,6 +6964,7 @@ export class PretrainedMixin {
 
 const MODEL_MAPPING_NAMES_ENCODER_ONLY = new Map([
     ['bert', ['BertModel', BertModel]],
+    ['modernbert', ['ModernBertModel', ModernBertModel]],
     ['nomic_bert', ['NomicBertModel', NomicBertModel]],
     ['roformer', ['RoFormerModel', RoFormerModel]],
     ['electra', ['ElectraModel', ElectraModel]],
@@ -6903,6 +7066,7 @@ const MODEL_MAPPING_NAMES_DECODER_ONLY = new Map([
     ['gpt_neox', ['GPTNeoXModel', GPTNeoXModel]],
     ['codegen', ['CodeGenModel', CodeGenModel]],
     ['llama', ['LlamaModel', LlamaModel]],
+    ['exaone', ['ExaoneModel', ExaoneModel]],
     ['olmo', ['OlmoModel', OlmoModel]],
     ['olmo2', ['Olmo2Model', Olmo2Model]],
     ['mobilellm', ['MobileLLMModel', MobileLLMModel]],
@@ -6925,6 +7089,7 @@ const MODEL_MAPPING_NAMES_DECODER_ONLY = new Map([
 const MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES = new Map([
     ['speecht5', ['SpeechT5ForSpeechToText', SpeechT5ForSpeechToText]],
     ['whisper', ['WhisperForConditionalGeneration', WhisperForConditionalGeneration]],
+    ['moonshine', ['MoonshineForConditionalGeneration', MoonshineForConditionalGeneration]],
 ]);
 
 const MODEL_FOR_TEXT_TO_SPECTROGRAM_MAPPING_NAMES = new Map([
@@ -6938,6 +7103,7 @@ const MODEL_FOR_TEXT_TO_WAVEFORM_MAPPING_NAMES = new Map([
 
 const MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES = new Map([
     ['bert', ['BertForSequenceClassification', BertForSequenceClassification]],
+    ['modernbert', ['ModernBertForSequenceClassification', ModernBertForSequenceClassification]],
     ['roformer', ['RoFormerForSequenceClassification', RoFormerForSequenceClassification]],
     ['electra', ['ElectraForSequenceClassification', ElectraForSequenceClassification]],
     ['esm', ['EsmForSequenceClassification', EsmForSequenceClassification]],
@@ -6959,6 +7125,7 @@ const MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES = new Map([
 
 const MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES = new Map([
     ['bert', ['BertForTokenClassification', BertForTokenClassification]],
+    ['modernbert', ['ModernBertForTokenClassification', ModernBertForTokenClassification]],
     ['roformer', ['RoFormerForTokenClassification', RoFormerForTokenClassification]],
     ['electra', ['ElectraForTokenClassification', ElectraForTokenClassification]],
     ['esm', ['EsmForTokenClassification', EsmForTokenClassification]],
@@ -6995,6 +7162,7 @@ const MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = new Map([
     ['gpt_neox', ['GPTNeoXForCausalLM', GPTNeoXForCausalLM]],
     ['codegen', ['CodeGenForCausalLM', CodeGenForCausalLM]],
     ['llama', ['LlamaForCausalLM', LlamaForCausalLM]],
+    ['exaone', ['ExaoneForCausalLM', ExaoneForCausalLM]],
     ['olmo', ['OlmoForCausalLM', OlmoForCausalLM]],
     ['olmo2', ['Olmo2ForCausalLM', Olmo2ForCausalLM]],
     ['mobilellm', ['MobileLLMForCausalLM', MobileLLMForCausalLM]],
@@ -7014,6 +7182,9 @@ const MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = new Map([
     ['falcon', ['FalconForCausalLM', FalconForCausalLM]],
     ['trocr', ['TrOCRForCausalLM', TrOCRForCausalLM]],
     ['stablelm', ['StableLmForCausalLM', StableLmForCausalLM]],
+
+    // Also image-text-to-text
+    ['phi3_v', ['Phi3VForCausalLM', Phi3VForCausalLM]],
 ]);
 
 const MODEL_FOR_MULTIMODALITY_MAPPING_NAMES = new Map([
@@ -7023,6 +7194,7 @@ const MODEL_FOR_MULTIMODALITY_MAPPING_NAMES = new Map([
 
 const MODEL_FOR_MASKED_LM_MAPPING_NAMES = new Map([
     ['bert', ['BertForMaskedLM', BertForMaskedLM]],
+    ['modernbert', ['ModernBertForMaskedLM', ModernBertForMaskedLM]],
     ['roformer', ['RoFormerForMaskedLM', RoFormerForMaskedLM]],
     ['electra', ['ElectraForMaskedLM', ElectraForMaskedLM]],
     ['esm', ['EsmForMaskedLM', EsmForMaskedLM]],
@@ -7251,6 +7423,7 @@ const CUSTOM_MAPPING = [
     // OVERRIDE:
     // TODO: Refactor to allow class to specify model
     ['MusicgenForConditionalGeneration', MusicgenForConditionalGeneration, MODEL_TYPES.Musicgen],
+    ['Phi3VForCausalLM', Phi3VForCausalLM, MODEL_TYPES.Phi3V],
 
     ['CLIPTextModelWithProjection', CLIPTextModelWithProjection, MODEL_TYPES.EncoderOnly],
     ['SiglipTextModel', SiglipTextModel, MODEL_TYPES.EncoderOnly],

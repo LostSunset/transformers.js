@@ -270,8 +270,11 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
     } else if (session_options.externalData !== undefined) {
         externalDataPromises = session_options.externalData.map(async (ext) => {
             // if the external data is a string, fetch the file and replace the string with its content
+            // @ts-expect-error TS2339
             if (typeof ext.data === "string") {
+                // @ts-expect-error TS2339
                 const ext_buffer = await getModelFile(pretrained_model_name_or_path, ext.data, true, options);
+                // @ts-expect-error TS2698
                 return { ...ext, data: ext_buffer };
             }
             return ext;
@@ -1519,6 +1522,7 @@ export class PreTrainedModel extends Callable {
                 if (this.config.model_type === 'musicgen') {
                     // Custom logic (TODO: move to Musicgen class)
                     decoder_input_ids = Array.from({
+                        // @ts-expect-error TS2339
                         length: batch_size * this.config.decoder.num_codebooks
                     }, () => [decoder_start_token_id]);
 
@@ -1848,11 +1852,13 @@ export class PreTrainedModel extends Callable {
     async encode_image({ pixel_values }) {
         // image_inputs === { pixel_values }
         const features = (await sessionRun(this.sessions['vision_encoder'], { pixel_values })).image_features;
+        // @ts-expect-error TS2339
         if (!this.config.num_image_tokens) {
             console.warn(
                 'The number of image tokens was not set in the model configuration. ' +
                 `Setting it to the number of features detected by the vision encoder (${features.dims[1]}).`
             )
+            // @ts-expect-error TS2339
             this.config.num_image_tokens = features.dims[1];
         }
         return features;
@@ -3280,6 +3286,7 @@ export class WhisperForConditionalGeneration extends WhisperPreTrainedModel {
 
         if (generation_config.return_token_timestamps) {
             outputs["token_timestamps"] = this._extract_token_timestamps(
+                // @ts-expect-error TS2345
                 outputs,
                 generation_config.alignment_heads,
                 generation_config.num_frames,
@@ -3315,6 +3322,7 @@ export class WhisperForConditionalGeneration extends WhisperPreTrainedModel {
             );
         }
 
+        // @ts-expect-error TS2339
         let median_filter_width = this.config.median_filter_width;
         if (median_filter_width === undefined) {
             console.warn("Model config has no `median_filter_width`, using default value of 7.")
@@ -3325,6 +3333,7 @@ export class WhisperForConditionalGeneration extends WhisperPreTrainedModel {
         const batch = generate_outputs.cross_attentions;
         // Create a list with `decoder_layers` elements, each a tensor of shape
         // (batch size, attention_heads, output length, input length).
+        // @ts-expect-error TS2339
         const cross_attentions = Array.from({ length: this.config.decoder_layers },
             // Concatenate the cross attentions for each layer across sequence length dimension.
             (_, i) => cat(batch.map(x => x[i]), 2)
@@ -3421,7 +3430,7 @@ export class MoonshinePreTrainedModel extends PreTrainedModel {
  */
 export class MoonshineModel extends MoonshinePreTrainedModel { }
 
-export class MoonshineForConditionalGeneration extends MoonshinePreTrainedModel { } 
+export class MoonshineForConditionalGeneration extends MoonshinePreTrainedModel { }
 //////////////////////////////////////////////////
 
 
@@ -3468,6 +3477,7 @@ export class LlavaForConditionalGeneration extends LlavaPreTrainedModel {
         attention_mask,
     }) {
 
+        // @ts-expect-error TS2339
         const image_token_index = this.config.image_token_index;
 
         const idsList = input_ids.tolist();
@@ -3821,9 +3831,9 @@ export class CLIPTextModel extends CLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'text_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'text_model',
         });
     }
 }
@@ -3858,9 +3868,9 @@ export class CLIPTextModelWithProjection extends CLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'text_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'text_model',
         });
     }
 }
@@ -3872,9 +3882,9 @@ export class CLIPVisionModel extends CLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'vision_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'vision_model',
         });
     }
 }
@@ -3909,9 +3919,9 @@ export class CLIPVisionModelWithProjection extends CLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'vision_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'vision_model',
         });
     }
 }
@@ -3997,9 +4007,9 @@ export class SiglipTextModel extends SiglipPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'text_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'text_model',
         });
     }
 }
@@ -4034,9 +4044,9 @@ export class SiglipVisionModel extends CLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'vision_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'vision_model',
         });
     }
 }
@@ -4093,9 +4103,9 @@ export class JinaCLIPTextModel extends JinaCLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'text_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'text_model',
         });
     }
 }
@@ -4104,9 +4114,9 @@ export class JinaCLIPVisionModel extends JinaCLIPPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'vision_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'vision_model',
         });
     }
 }
@@ -4453,6 +4463,7 @@ export class Qwen2VLForConditionalGeneration extends Qwen2VLPreTrainedModel {
                 const image_nums = vision_tokens.filter(x => x == image_token_id).length;
                 const video_nums = vision_tokens.filter(x => x == video_token_id).length;
 
+                /** @type {number[][]} */
                 let llm_pos_ids_list = [];
                 let st = 0;
                 let remain_images = image_nums;
@@ -4522,6 +4533,7 @@ export class Qwen2VLForConditionalGeneration extends Qwen2VLPreTrainedModel {
                 // NOTE: Each item in llm_pos_ids_list is an array of shape (3, text_len),
                 // meaning to perform concatenation along dim=1, we can do the following:
                 const num_items = llm_pos_ids_list.reduce((acc, x) => acc + x.length, 0);
+                /** @type {number[]} */
                 const llm_positions = new Array(num_items);
                 let index = 0;
                 for (let x = 0; x < 3; ++x) {
@@ -4562,9 +4574,10 @@ export class Qwen2VLForConditionalGeneration extends Qwen2VLPreTrainedModel {
                     { length: 3 * data.length },
                     (_, i) => data[i % data.length]
                 );
+                /** @type {bigint[]} */
                 const mrope_position_deltas = Array.from(
                     { length: dims[0] },
-                    (_, i) => max(data.subarray(dims[1] * i, dims[1] * (i + 1)))[0] + 1 + dims[1]
+                    (_, i) => max(data.subarray(dims[1] * i, dims[1] * (i + 1)))[0] + 1n + BigInt(dims[1])
                 );
 
                 return [
@@ -5135,7 +5148,7 @@ export class DPTModel extends DPTPreTrainedModel { }
  * 
  * **Example:** Depth estimation w/ `Xenova/dpt-hybrid-midas`.
  * ```javascript
- * import { DPTForDepthEstimation, AutoProcessor, RawImage, interpolate, max } from '@huggingface/transformers';
+ * import { DPTForDepthEstimation, AutoProcessor, RawImage, interpolate_4d } from '@huggingface/transformers';
  * 
  * // Load model and processor
  * const model_id = 'Xenova/dpt-hybrid-midas';
@@ -5144,7 +5157,7 @@ export class DPTModel extends DPTPreTrainedModel { }
  * 
  * // Load image from URL
  * const url = 'http://images.cocodataset.org/val2017/000000039769.jpg';
- * const image = await RawImage.fromURL(url);
+ * const image = await RawImage.read(url);
  * 
  * // Prepare image for the model
  * const inputs = await processor(image);
@@ -5153,10 +5166,15 @@ export class DPTModel extends DPTPreTrainedModel { }
  * const { predicted_depth } = await model(inputs);
  * 
  * // Interpolate to original size
- * const prediction = interpolate(predicted_depth, image.size.reverse(), 'bilinear', false);
+ * const prediction = (await interpolate_4d(predicted_depth.unsqueeze(1), {
+     * size: image.size.reverse(),
+     * mode: 'bilinear',
+ * })).squeeze(1);
  * 
  * // Visualize the prediction
- * const formatted = prediction.mul_(255 / max(prediction.data)[0]).to('uint8');
+ * const min = prediction.min().item();
+ * const max = prediction.max().item();
+ * const formatted = prediction.sub_(min).div_(max - min).mul_(255).to('uint8');
  * const depth = RawImage.fromTensor(formatted);
  * // RawImage {
  * //   data: Uint8Array(307200) [ 85, 85, 84, ... ],
@@ -5206,11 +5224,7 @@ export class GLPNPreTrainedModel extends PreTrainedModel { }
 export class GLPNModel extends GLPNPreTrainedModel { }
 
 /**
- * GLPN Model transformer with a lightweight depth estimation head on top e.g. for KITTI, NYUv2.
- * 
- * **Example:** Depth estimation w/ `Xenova/glpn-kitti`.
- * ```javascript
- * import { GLPNForDepthEstimation, AutoProcessor, RawImage, interpolate, max } from '@huggingface/transformers';
+ * import { GLPNForDepthEstimation, AutoProcessor, RawImage, interpolate_4d } from '@huggingface/transformers';
  * 
  * // Load model and processor
  * const model_id = 'Xenova/glpn-kitti';
@@ -5219,7 +5233,7 @@ export class GLPNModel extends GLPNPreTrainedModel { }
  * 
  * // Load image from URL
  * const url = 'http://images.cocodataset.org/val2017/000000039769.jpg';
- * const image = await RawImage.fromURL(url);
+ * const image = await RawImage.read(url);
  * 
  * // Prepare image for the model
  * const inputs = await processor(image);
@@ -5228,13 +5242,18 @@ export class GLPNModel extends GLPNPreTrainedModel { }
  * const { predicted_depth } = await model(inputs);
  * 
  * // Interpolate to original size
- * const prediction = interpolate(predicted_depth, image.size.reverse(), 'bilinear', false);
+ * const prediction = (await interpolate_4d(predicted_depth.unsqueeze(1), {
+     * size: image.size.reverse(),
+     * mode: 'bilinear',
+ * })).squeeze(1);
  * 
  * // Visualize the prediction
- * const formatted = prediction.mul_(255 / max(prediction.data)[0]).to('uint8');
+ * const min = prediction.min().item();
+ * const max = prediction.max().item();
+ * const formatted = prediction.sub_(min).div_(max - min).mul_(255).to('uint8');
  * const depth = RawImage.fromTensor(formatted);
  * // RawImage {
- * //   data: Uint8Array(307200) [ 207, 169, 154, ... ],
+ * //   data: Uint8Array(307200) [ 85, 85, 84, ... ],
  * //   width: 640,
  * //   height: 480,
  * //   channels: 1
@@ -5389,6 +5408,26 @@ export class Dinov2ForImageClassification extends Dinov2PreTrainedModel {
 }
 //////////////////////////////////////////////////
 
+//////////////////////////////////////////////////
+export class Dinov2WithRegistersPreTrainedModel extends PreTrainedModel { }
+
+/**
+ * The bare Dinov2WithRegisters Model transformer outputting raw hidden-states without any specific head on top.
+ */
+export class Dinov2WithRegistersModel extends Dinov2WithRegistersPreTrainedModel { }
+
+/**
+ * Dinov2WithRegisters Model transformer with an image classification head on top (a linear layer on top of the final hidden state of the [CLS] token) e.g. for ImageNet.
+ */
+export class Dinov2WithRegistersForImageClassification extends Dinov2WithRegistersPreTrainedModel {
+    /**
+     * @param {any} model_inputs
+     */
+    async _call(model_inputs) {
+        return new SequenceClassifierOutput(await super._call(model_inputs));
+    }
+}
+//////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
 export class YolosPreTrainedModel extends PreTrainedModel { }
@@ -6181,10 +6220,12 @@ export class SpeechT5ForTextToSpeech extends SpeechT5PreTrainedModel {
 
         const { encoder_outputs, encoder_attention_mask } = await encoderForward(this, model_inputs);
 
+        // @ts-expect-error TS2339
         const r = encoder_outputs.dims[1] / this.config.reduction_factor;
         const maxlen = Math.floor(r * maxlenratio);
         const minlen = Math.floor(r * minlenratio);
 
+        // @ts-expect-error TS2339
         const num_mel_bins = this.config.num_mel_bins;
 
         let spectrogramParts = [];
@@ -6338,9 +6379,9 @@ export class ClapTextModelWithProjection extends ClapPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'text_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'text_model',
         });
     }
 }
@@ -6375,9 +6416,9 @@ export class ClapAudioModelWithProjection extends ClapPreTrainedModel {
     /** @type {typeof PreTrainedModel.from_pretrained} */
     static async from_pretrained(pretrained_model_name_or_path, options = {}) {
         return super.from_pretrained(pretrained_model_name_or_path, {
-            // Update default model file name if not provided
-            model_file_name: 'audio_model',
             ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'audio_model',
         });
     }
 }
@@ -6549,11 +6590,13 @@ export class MusicgenForConditionalGeneration extends PreTrainedModel { // NOTE:
      */
     _apply_and_filter_by_delay_pattern_mask(outputs) {
         const [bs_x_codebooks, seqLength] = outputs.dims;
+        // @ts-expect-error TS2339
         const num_codebooks = this.config.decoder.num_codebooks;
         const upperBound = (seqLength - num_codebooks);
 
         let newDataSize = 0;
         for (let i = 0; i < outputs.size; ++i) {
+            // @ts-expect-error TS2339
             if (outputs.data[i] === this.config.decoder.pad_token_id) {
                 continue;
             }
@@ -6583,7 +6626,9 @@ export class MusicgenForConditionalGeneration extends PreTrainedModel { // NOTE:
         let clonedInputIds = structuredClone(input_ids);
         for (let i = 0; i < clonedInputIds.length; ++i) {
             for (let j = 0; j < clonedInputIds[i].length; ++j) {
+                // @ts-expect-error TS2339
                 if ((i % this.config.decoder.num_codebooks) >= j) {
+                    // @ts-expect-error TS2339
                     clonedInputIds[i][j] = BigInt(this.config.decoder.pad_token_id);
                 }
             }
@@ -6740,6 +6785,9 @@ export class MultiModalityCausalLM extends MultiModalityPreTrainedModel {
         'past_key_values',
     ];
 
+    /**
+     * @param {ConstructorParameters<typeof MultiModalityPreTrainedModel>} args
+     */
     constructor(...args) {
         super(...args);
 
@@ -7018,6 +7066,7 @@ const MODEL_MAPPING_NAMES_ENCODER_ONLY = new Map([
     ['convnext', ['ConvNextModel', ConvNextModel]],
     ['convnextv2', ['ConvNextV2Model', ConvNextV2Model]],
     ['dinov2', ['Dinov2Model', Dinov2Model]],
+    ['dinov2_with_registers', ['Dinov2WithRegistersModel', Dinov2WithRegistersModel]],
     ['resnet', ['ResNetModel', ResNetModel]],
     ['swin', ['SwinModel', SwinModel]],
     ['swin2sr', ['Swin2SRModel', Swin2SRModel]],
@@ -7263,6 +7312,7 @@ const MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING_NAMES = new Map([
     ['convnext', ['ConvNextForImageClassification', ConvNextForImageClassification]],
     ['convnextv2', ['ConvNextV2ForImageClassification', ConvNextV2ForImageClassification]],
     ['dinov2', ['Dinov2ForImageClassification', Dinov2ForImageClassification]],
+    ['dinov2_with_registers', ['Dinov2WithRegistersForImageClassification', Dinov2WithRegistersForImageClassification]],
     ['resnet', ['ResNetForImageClassification', ResNetForImageClassification]],
     ['swin', ['SwinForImageClassification', SwinForImageClassification]],
     ['segformer', ['SegformerForImageClassification', SegformerForImageClassification]],
@@ -7706,10 +7756,17 @@ export class SequenceClassifierOutput extends ModelOutput {
     /**
      * @param {Object} output The output of the model.
      * @param {Tensor} output.logits classification (or regression if config.num_labels==1) scores (before SoftMax).
+     * @param {Record<string, Tensor>} [output.attentions] Object of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length, sequence_length)`.
+     * Attentions weights after the attention softmax, used to compute the weighted average in the self-attention heads.
      */
-    constructor({ logits }) {
+    constructor({ logits, ...attentions }) {
         super();
         this.logits = logits;
+        const attentions_list = Object.values(attentions);
+        if (attentions_list.length > 0) {
+            // Only set attentions if they are not empty
+            this.attentions = attentions_list;
+        }
     }
 }
 

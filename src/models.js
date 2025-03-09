@@ -68,6 +68,7 @@ import {
 import {
     getModelFile,
     getModelJSON,
+    MAX_EXTERNAL_DATA_CHUNKS,
 } from './utils/hub.js';
 
 import {
@@ -134,6 +135,7 @@ const MODEL_TYPES = {
     MultiModality: 8,
     Phi3V: 9,
     AudioTextToText: 10,
+    AutoEncoder: 11,
 }
 //////////////////////////////////////////////////
 
@@ -152,7 +154,7 @@ const MODEL_CLASS_TO_NAME_MAPPING = new Map();
  * @param {string} pretrained_model_name_or_path The path to the directory containing the model file.
  * @param {string} fileName The name of the model file.
  * @param {import('./utils/hub.js').PretrainedModelOptions} options Additional options for loading the model.
- * @returns {Promise<{buffer: Uint8Array, session_options: Object, session_config: Object}>} A Promise that resolves to the data needed to create an InferenceSession object.
+ * @returns {Promise<{buffer_or_path: Uint8Array|string, session_options: Object, session_config: Object}>} A Promise that resolves to the data needed to create an InferenceSession object.
  * @private
  */
 async function getSession(pretrained_model_name_or_path, fileName, options) {
@@ -227,7 +229,8 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
 
     // Construct the model file name
     const suffix = DEFAULT_DTYPE_SUFFIX_MAPPING[selectedDtype];
-    const modelFileName = `${options.subfolder ?? ''}/${fileName}${suffix}.onnx`;
+    const baseName = `${fileName}${suffix}.onnx`;
+    const modelFileName = `${options.subfolder ?? ''}/${baseName}`;
 
     const session_options = { ...options.session_options };
 
@@ -245,29 +248,38 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
         );
     }
 
-    const bufferPromise = getModelFile(pretrained_model_name_or_path, modelFileName, true, options);
+    const bufferOrPathPromise = getModelFile(pretrained_model_name_or_path, modelFileName, true, options, apis.IS_NODE_ENV);
 
     // handle onnx external data files
     const use_external_data_format = options.use_external_data_format ?? custom_config.use_external_data_format;
-    /** @type {Promise<{path: string, data: Uint8Array}>[]} */
+    /** @type {Promise<string|{path: string, data: Uint8Array}>[]} */
     let externalDataPromises = [];
-    if (use_external_data_format && (
-        use_external_data_format === true ||
-        (
-            typeof use_external_data_format === 'object' &&
-            use_external_data_format.hasOwnProperty(fileName) &&
-            use_external_data_format[fileName] === true
-        )
-    )) {
-        if (apis.IS_NODE_ENV) {
-            throw new Error('External data format is not yet supported in Node.js');
+    if (use_external_data_format) {
+        let external_data_format;
+        if (typeof use_external_data_format === 'object') {
+            if (use_external_data_format.hasOwnProperty(baseName)) {
+                external_data_format = use_external_data_format[baseName];
+            } else if (use_external_data_format.hasOwnProperty(fileName)) {
+                external_data_format = use_external_data_format[fileName];
+            } else {
+                external_data_format = false;
+            }
+        } else {
+            external_data_format = use_external_data_format;
         }
-        const path = `${fileName}${suffix}.onnx_data`;
-        const fullPath = `${options.subfolder ?? ''}/${path}`;
-        externalDataPromises.push(new Promise(async (resolve, reject) => {
-            const data = await getModelFile(pretrained_model_name_or_path, fullPath, true, options);
-            resolve({ path, data })
-        }));
+
+        const num_chunks = +external_data_format; // (false=0, true=1, number remains the same)
+        if (num_chunks > MAX_EXTERNAL_DATA_CHUNKS) {
+            throw new Error(`The number of external data chunks (${num_chunks}) exceeds the maximum allowed value (${MAX_EXTERNAL_DATA_CHUNKS}).`);
+        }
+        for (let i = 0; i < num_chunks; ++i) {
+            const path = `${baseName}_data${i === 0 ? '' : '_' + i}`;
+            const fullPath = `${options.subfolder ?? ''}/${path}`;
+            externalDataPromises.push(new Promise(async (resolve, reject) => {
+                const data = await getModelFile(pretrained_model_name_or_path, fullPath, true, options, apis.IS_NODE_ENV);
+                resolve(data instanceof Uint8Array ? { path, data } : path);
+            }));
+        }
 
     } else if (session_options.externalData !== undefined) {
         externalDataPromises = session_options.externalData.map(async (ext) => {
@@ -284,7 +296,10 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
     }
 
     if (externalDataPromises.length > 0) {
-        session_options.externalData = await Promise.all(externalDataPromises);
+        const externalData = await Promise.all(externalDataPromises);
+        if (!apis.IS_NODE_ENV) {
+            session_options.externalData = externalData;
+        }
     }
 
     if (selectedDevice === 'webgpu') {
@@ -302,9 +317,9 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
         }
     }
 
-    const buffer = await bufferPromise;
+    const buffer_or_path = await bufferOrPathPromise;
 
-    return { buffer, session_options, session_config };
+    return { buffer_or_path, session_options, session_config };
 }
 
 /**
@@ -319,8 +334,8 @@ async function getSession(pretrained_model_name_or_path, fileName, options) {
 async function constructSessions(pretrained_model_name_or_path, names, options) {
     return Object.fromEntries(await Promise.all(
         Object.keys(names).map(async (name) => {
-            const { buffer, session_options, session_config } = await getSession(pretrained_model_name_or_path, names[name], options);
-            const session = await createInferenceSession(buffer, session_options, session_config);
+            const { buffer_or_path, session_options, session_config } = await getSession(pretrained_model_name_or_path, names[name], options);
+            const session = await createInferenceSession(buffer_or_path, session_options, session_config);
             return [name, session];
         })
     ));
@@ -552,6 +567,12 @@ async function encoderForward(self, model_inputs) {
     }
 
     return await sessionRun(session, encoderFeeds);
+}
+
+async function autoEncoderForward(self, model_inputs) {
+    const encoded = await self.encode(model_inputs);
+    const decoded = await self.decode(encoded);
+    return decoded;
 }
 
 /**
@@ -1009,12 +1030,13 @@ export class PreTrainedModel extends Callable {
                 this.can_generate = true;
                 this._prepare_inputs_for_generation = multimodal_text_to_text_prepare_inputs_for_generation;
                 break;
-
             case MODEL_TYPES.MultiModality:
                 this.can_generate = true;
                 this._prepare_inputs_for_generation = multimodality_prepare_inputs_for_generation;
                 break;
-
+            case MODEL_TYPES.AutoEncoder:
+                this._forward = autoEncoderForward;
+                break;
             default:
                 // should be MODEL_TYPES.EncoderOnly
                 this._forward = encoderForward;
@@ -1197,7 +1219,13 @@ export class PreTrainedModel extends Callable {
                     generation_config: 'generation_config.json',
                 }, options),
             ]);
-
+        } else if (modelType === MODEL_TYPES.AutoEncoder) {
+            info = await Promise.all([
+                constructSessions(pretrained_model_name_or_path, {
+                    encoder_model: 'encoder_model',
+                    decoder_model: 'decoder_model',
+                }, options),
+            ]);
         } else { // should be MODEL_TYPES.EncoderOnly
             if (modelType !== MODEL_TYPES.EncoderOnly) {
                 const type = modelName ?? config?.model_type;
@@ -3524,6 +3552,7 @@ export class WhisperForConditionalGeneration extends WhisperPreTrainedModel {
 }
 //////////////////////////////////////////////////
 
+export class LiteWhisperForConditionalGeneration extends WhisperForConditionalGeneration { }
 
 //////////////////////////////////////////////////
 // Moonshine models
@@ -5223,6 +5252,7 @@ export class SwinForImageClassification extends SwinPreTrainedModel {
         return new SequenceClassifierOutput(await super._call(model_inputs));
     }
 }
+export class SwinForSemanticSegmentation extends SwinPreTrainedModel { }
 //////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
@@ -6825,6 +6855,8 @@ export class MobileNetV1ForImageClassification extends MobileNetV1PreTrainedMode
         return new SequenceClassifierOutput(await super._call(model_inputs));
     }
 }
+
+export class MobileNetV1ForSemanticSegmentation extends MobileNetV1PreTrainedModel { }
 //////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
@@ -6848,6 +6880,7 @@ export class MobileNetV2ForImageClassification extends MobileNetV2PreTrainedMode
         return new SequenceClassifierOutput(await super._call(model_inputs));
     }
 }
+export class MobileNetV2ForSemanticSegmentation extends MobileNetV2PreTrainedModel { }
 //////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
@@ -6871,6 +6904,7 @@ export class MobileNetV3ForImageClassification extends MobileNetV3PreTrainedMode
         return new SequenceClassifierOutput(await super._call(model_inputs));
     }
 }
+export class MobileNetV3ForSemanticSegmentation extends MobileNetV3PreTrainedModel { }
 //////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
@@ -6894,6 +6928,7 @@ export class MobileNetV4ForImageClassification extends MobileNetV4PreTrainedMode
         return new SequenceClassifierOutput(await super._call(model_inputs));
     }
 }
+export class MobileNetV4ForSemanticSegmentation extends MobileNetV4PreTrainedModel { }
 //////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
@@ -7101,7 +7136,156 @@ export class UltravoxModel extends UltravoxPreTrainedModel {
 }
 //////////////////////////////////////////////////
 
+//////////////////////////////////////////////////
+// Mimi models
+export class MimiPreTrainedModel extends PreTrainedModel {
+    main_input_name = 'input_values';
+    forward_params = ['input_values'];
+}
 
+export class MimiEncoderOutput extends ModelOutput {
+    /**
+     * @param {Object} output The output of the model.
+     * @param {Tensor} output.audio_codes Discrete code embeddings, of shape `(batch_size, num_quantizers, codes_length)`.
+     */
+    constructor({ audio_codes }) {
+        super();
+        this.audio_codes = audio_codes;
+    }
+}
+
+export class MimiDecoderOutput extends ModelOutput {
+    /**
+     * @param {Object} output The output of the model.
+     * @param {Tensor} output.audio_values Decoded audio values, of shape `(batch_size, num_channels, sequence_length)`.
+     */
+    constructor({ audio_values }) {
+        super();
+        this.audio_values = audio_values;
+    }
+}
+
+/**
+ * The Mimi neural audio codec model.
+ */
+export class MimiModel extends MimiPreTrainedModel {
+    /**
+     * Encodes the input audio waveform into discrete codes.
+     * @param {Object} inputs Model inputs
+     * @param {Tensor} [inputs.input_values] Float values of the input audio waveform, of shape `(batch_size, channels, sequence_length)`).
+     * @returns {Promise<MimiEncoderOutput>} The output tensor of shape `(batch_size, num_codebooks, sequence_length)`.
+     */
+    async encode(inputs) {
+        return new MimiEncoderOutput(await sessionRun(this.sessions['encoder_model'], inputs));
+    }
+
+    /**
+     * Decodes the given frames into an output audio waveform.
+     * @param {MimiEncoderOutput} inputs The encoded audio codes.
+     * @returns {Promise<MimiDecoderOutput>} The output tensor of shape `(batch_size, num_channels, sequence_length)`.
+     */
+    async decode(inputs) {
+        return new MimiDecoderOutput(await sessionRun(this.sessions['decoder_model'], inputs));
+    }
+}
+
+export class MimiEncoderModel extends MimiPreTrainedModel {
+    /** @type {typeof PreTrainedModel.from_pretrained} */
+    static async from_pretrained(pretrained_model_name_or_path, options = {}) {
+        return super.from_pretrained(pretrained_model_name_or_path, {
+            ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'encoder_model',
+        });
+    }
+}
+export class MimiDecoderModel extends MimiPreTrainedModel {
+    /** @type {typeof PreTrainedModel.from_pretrained} */
+    static async from_pretrained(pretrained_model_name_or_path, options = {}) {
+        return super.from_pretrained(pretrained_model_name_or_path, {
+            ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'decoder_model',
+        });
+    }
+}
+//////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////
+// Dac models
+export class DacPreTrainedModel extends PreTrainedModel {
+    main_input_name = 'input_values';
+    forward_params = ['input_values'];
+}
+
+export class DacEncoderOutput extends ModelOutput {
+    /**
+     * @param {Object} output The output of the model.
+     * @param {Tensor} output.audio_codes Discrete code embeddings, of shape `(batch_size, num_quantizers, codes_length)`.
+     */
+    constructor({ audio_codes }) {
+        super();
+        this.audio_codes = audio_codes;
+    }
+}
+
+export class DacDecoderOutput extends ModelOutput {
+    /**
+     * @param {Object} output The output of the model.
+     * @param {Tensor} output.audio_values Decoded audio values, of shape `(batch_size, num_channels, sequence_length)`.
+     */
+    constructor({ audio_values }) {
+        super();
+        this.audio_values = audio_values;
+    }
+}
+
+/**
+ * The DAC (Descript Audio Codec) model.
+ */
+export class DacModel extends DacPreTrainedModel {
+    /**
+     * Encodes the input audio waveform into discrete codes.
+     * @param {Object} inputs Model inputs
+     * @param {Tensor} [inputs.input_values] Float values of the input audio waveform, of shape `(batch_size, channels, sequence_length)`).
+     * @returns {Promise<DacEncoderOutput>} The output tensor of shape `(batch_size, num_codebooks, sequence_length)`.
+     */
+    async encode(inputs) {
+        return new DacEncoderOutput(await sessionRun(this.sessions['encoder_model'], inputs));
+    }
+
+    /**
+     * Decodes the given frames into an output audio waveform.
+     * @param {DacEncoderOutput} inputs The encoded audio codes.
+     * @returns {Promise<DacDecoderOutput>} The output tensor of shape `(batch_size, num_channels, sequence_length)`.
+     */
+    async decode(inputs) {
+        return new DacDecoderOutput(await sessionRun(this.sessions['decoder_model'], inputs));
+    }
+}
+
+export class DacEncoderModel extends DacPreTrainedModel {
+    /** @type {typeof PreTrainedModel.from_pretrained} */
+    static async from_pretrained(pretrained_model_name_or_path, options = {}) {
+        return super.from_pretrained(pretrained_model_name_or_path, {
+            ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'encoder_model',
+        });
+    }
+}
+export class DacDecoderModel extends DacPreTrainedModel {
+    /** @type {typeof PreTrainedModel.from_pretrained} */
+    static async from_pretrained(pretrained_model_name_or_path, options = {}) {
+        return super.from_pretrained(pretrained_model_name_or_path, {
+            ...options,
+            // Update default model file name if not provided
+            model_file_name: options.model_file_name ?? 'decoder_model',
+        });
+    }
+}
+//////////////////////////////////////////////////
 
 //////////////////////////////////////////////////
 // AutoModels, used to simplify construction of PreTrainedModels
@@ -7158,20 +7342,29 @@ export class PretrainedMixin {
         if (!this.MODEL_CLASS_MAPPINGS) {
             throw new Error("`MODEL_CLASS_MAPPINGS` not implemented for this type of `AutoClass`: " + this.name);
         }
-
+        const model_type = options.config.model_type;
         for (const MODEL_CLASS_MAPPING of this.MODEL_CLASS_MAPPINGS) {
-            const modelInfo = MODEL_CLASS_MAPPING.get(options.config.model_type);
+            let modelInfo = MODEL_CLASS_MAPPING.get(model_type);
             if (!modelInfo) {
-                continue; // Item not found in this mapping
+                // As a fallback, we check if model_type is specified as the exact class
+                for (const cls of MODEL_CLASS_MAPPING.values()) {
+                    if (cls[0] === model_type) {
+                        modelInfo = cls;
+                        break;
+                    }
+                }
+                if (!modelInfo) continue; // Item not found in this mapping
             }
             return await modelInfo[1].from_pretrained(pretrained_model_name_or_path, options);
         }
 
         if (this.BASE_IF_FAIL) {
-            console.warn(`Unknown model class "${options.config.model_type}", attempting to construct from base class.`);
+            if (!(CUSTOM_ARCHITECTURES.has(model_type))) {
+                console.warn(`Unknown model class "${model_type}", attempting to construct from base class.`);
+            }
             return await PreTrainedModel.from_pretrained(pretrained_model_name_or_path, options);
         } else {
-            throw Error(`Unsupported model type: ${options.config.model_type}`)
+            throw Error(`Unsupported model type: ${model_type}`)
         }
     }
 }
@@ -7272,6 +7465,10 @@ const MODEL_MAPPING_NAMES_ENCODER_DECODER = new Map([
     ['blenderbot-small', ['BlenderbotSmallModel', BlenderbotSmallModel]],
 ]);
 
+const MODEL_MAPPING_NAMES_AUTO_ENCODER = new Map([
+    ['mimi', ['MimiModel', MimiModel]],
+    ['dac', ['DacModel', DacModel]],
+]);
 
 const MODEL_MAPPING_NAMES_DECODER_ONLY = new Map([
     ['bloom', ['BloomModel', BloomModel]],
@@ -7308,6 +7505,7 @@ const MODEL_MAPPING_NAMES_DECODER_ONLY = new Map([
 const MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES = new Map([
     ['speecht5', ['SpeechT5ForSpeechToText', SpeechT5ForSpeechToText]],
     ['whisper', ['WhisperForConditionalGeneration', WhisperForConditionalGeneration]],
+    ['lite-whisper', ['LiteWhisperForConditionalGeneration', LiteWhisperForConditionalGeneration]],
     ['moonshine', ['MoonshineForConditionalGeneration', MoonshineForConditionalGeneration]],
 ]);
 
@@ -7524,6 +7722,12 @@ const MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES = new Map([
 const MODEL_FOR_SEMANTIC_SEGMENTATION_MAPPING_NAMES = new Map([
     ['segformer', ['SegformerForSemanticSegmentation', SegformerForSemanticSegmentation]],
     ['sapiens', ['SapiensForSemanticSegmentation', SapiensForSemanticSegmentation]],
+
+    ['swin', ['SwinForSemanticSegmentation', SwinForSemanticSegmentation]],
+    ['mobilenet_v1', ['MobileNetV1ForSemanticSegmentation', MobileNetV1ForSemanticSegmentation]],
+    ['mobilenet_v2', ['MobileNetV2ForSemanticSegmentation', MobileNetV2ForSemanticSegmentation]],
+    ['mobilenet_v3', ['MobileNetV3ForSemanticSegmentation', MobileNetV3ForSemanticSegmentation]],
+    ['mobilenet_v4', ['MobileNetV4ForSemanticSegmentation', MobileNetV4ForSemanticSegmentation]],
 ]);
 
 const MODEL_FOR_UNIVERSAL_SEGMENTATION_MAPPING_NAMES = new Map([
@@ -7603,9 +7807,12 @@ const MODEL_FOR_IMAGE_FEATURE_EXTRACTION_MAPPING_NAMES = new Map([
 ])
 
 const MODEL_CLASS_TYPE_MAPPING = [
+    // MODEL_MAPPING_NAMES:
     [MODEL_MAPPING_NAMES_ENCODER_ONLY, MODEL_TYPES.EncoderOnly],
     [MODEL_MAPPING_NAMES_ENCODER_DECODER, MODEL_TYPES.EncoderDecoder],
     [MODEL_MAPPING_NAMES_DECODER_ONLY, MODEL_TYPES.DecoderOnly],
+    [MODEL_MAPPING_NAMES_AUTO_ENCODER, MODEL_TYPES.AutoEncoder],
+
     [MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING_NAMES, MODEL_TYPES.EncoderOnly],
     [MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES, MODEL_TYPES.EncoderOnly],
     [MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES, MODEL_TYPES.Seq2Seq],
@@ -7661,11 +7868,29 @@ const CUSTOM_MAPPING = [
     ['JinaCLIPTextModel', JinaCLIPTextModel, MODEL_TYPES.EncoderOnly],
     ['ClapTextModelWithProjection', ClapTextModelWithProjection, MODEL_TYPES.EncoderOnly],
     ['ClapAudioModelWithProjection', ClapAudioModelWithProjection, MODEL_TYPES.EncoderOnly],
+
+    ['DacEncoderModel', DacEncoderModel, MODEL_TYPES.EncoderOnly],
+    ['DacDecoderModel', DacDecoderModel, MODEL_TYPES.EncoderOnly],
+    ['MimiEncoderModel', MimiEncoderModel, MODEL_TYPES.EncoderOnly],
+    ['MimiDecoderModel', MimiDecoderModel, MODEL_TYPES.EncoderOnly],
 ]
 for (const [name, model, type] of CUSTOM_MAPPING) {
     MODEL_TYPE_MAPPING.set(name, type);
     MODEL_CLASS_TO_NAME_MAPPING.set(model, name);
     MODEL_NAME_TO_CLASS_MAPPING.set(name, model);
+}
+
+const CUSTOM_ARCHITECTURES = new Map([
+    ['modnet', MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES],
+    ['birefnet', MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES],
+    ['isnet', MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES],
+    ['ben', MODEL_FOR_IMAGE_SEGMENTATION_MAPPING_NAMES],
+]);
+for (const [name, mapping] of CUSTOM_ARCHITECTURES.entries()) {
+    mapping.set(name, ['PreTrainedModel', PreTrainedModel])
+    MODEL_TYPE_MAPPING.set(name, MODEL_TYPES.EncoderOnly);
+    MODEL_CLASS_TO_NAME_MAPPING.set(PreTrainedModel, name);
+    MODEL_NAME_TO_CLASS_MAPPING.set(name, PreTrainedModel);
 }
 
 
